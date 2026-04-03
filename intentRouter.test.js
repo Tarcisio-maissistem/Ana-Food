@@ -329,6 +329,61 @@ describe('detectCancel', () => {
     const result = intentRouter.classify('arroz e feijão', state, COMPANY);
     expect(result).toBeNull();
   });
+
+  test('"cancela o refrigerante" → NÃO cancela pedido (item específico)', () => {
+    const state = makeState('CONFIRMANDO');
+    const result = intentRouter.classify('cancela o refrigerante', state, COMPANY);
+    expect(result).toBeNull();
+    expect(state._confirmandoCancelamento).toBeFalsy();
+  });
+
+  test('"cancela a coca" → NÃO cancela pedido (item específico)', () => {
+    const state = makeState('CONFIRMANDO');
+    const result = intentRouter.classify('cancela a coca', state, COMPANY);
+    expect(result).toBeNull();
+  });
+
+  test('"cancela o suco" → NÃO cancela pedido (item específico)', () => {
+    const state = makeState('CONFIRMANDO');
+    const result = intentRouter.classify('cancela o suco', state, COMPANY);
+    expect(result).toBeNull();
+  });
+
+  test('"não" durante confirmação de cancelamento → limpa flag e retorna null', () => {
+    const state = makeState('CONFIRMANDO');
+    state._confirmandoCancelamento = true;
+    const result = intentRouter.classify('nao', state, COMPANY);
+    expect(result).toBeNull();
+    expect(state._confirmandoCancelamento).toBe(false);
+  });
+
+  test('"não é pra cancelar" durante confirmação → limpa flag, NÃO cancela', () => {
+    const state = makeState('CONFIRMANDO');
+    state._confirmandoCancelamento = true;
+    const result = intentRouter.classify('não é pra cancelar o pedido não! é pra retirar o refrigerante', state, COMPANY);
+    // detectCancel limpa a flag e retorna null, mas outro handler pode capturar (ex: detectDrinkCorrection)
+    expect(state._confirmandoCancelamento).toBe(false);
+    if (result) {
+      expect(result.intent).not.toBe('CANCEL_PENDING');
+      expect(result.intent).not.toBe('CANCEL_CONFIRMED');
+    }
+  });
+
+  test('"sim" durante confirmação de cancelamento → CANCEL_CONFIRMED', () => {
+    const state = makeState('CONFIRMANDO');
+    state._confirmandoCancelamento = true;
+    const result = intentRouter.classify('sim', state, COMPANY);
+    expect(result).not.toBeNull();
+    expect(result.intent).toBe('CANCEL_CONFIRMED');
+    expect(state.etapa).toBe('INICIO');
+  });
+
+  test('"cancela tudo" → pede confirmação (não é item específico)', () => {
+    const state = makeState('CONFIRMANDO');
+    const result = intentRouter.classify('cancela tudo', state, COMPANY);
+    expect(result).not.toBeNull();
+    expect(result.intent).toBe('CANCEL_PENDING');
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -336,13 +391,14 @@ describe('detectCancel', () => {
 // ═══════════════════════════════════════════════════════════════
 
 describe('detectFrustration', () => {
-  test('"aff que chato" → FRUSTRATION', () => {
+  test('"aff que chato" → FRUSTRATION com mensagem empática', () => {
     const state = makeState('MONTANDO_ACOMPANHAMENTO');
     const result = intentRouter.classify('aff que chato', state, COMPANY);
     expect(result).not.toBeNull();
     expect(result.intent).toBe('FRUSTRATION');
     const resp = Array.isArray(result.response) ? result.response.join(' ') : result.response;
-    expect(resp).toContain('Desculpa');
+    // Aceita qualquer das respostas empáticas (são aleatórias)
+    expect(resp).toMatch(/desculpa|perdoa/i);
   });
 
   test('"que chato" → FRUSTRATION', () => {
@@ -560,5 +616,73 @@ describe('Intent Router — ASK_SUMMARY', () => {
     const result = intentRouter.classify('meu pedido completo', state, COMPANY);
     expect(result).not.toBeNull();
     expect(result.intent).toBe('ASK_SUMMARY');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// CANCEL — Variantes linguísticas ampliadas
+// ═══════════════════════════════════════════════════════════════
+
+describe('detectCancel — variantes naturais', () => {
+  test('"pode cancelar" → CANCEL_PENDING', () => {
+    const state = makeState('MONTANDO_PROTEINA');
+    const result = intentRouter.classify('pode cancelar', state, COMPANY);
+    expect(result).not.toBeNull();
+    expect(result.intent).toBe('CANCEL_PENDING');
+  });
+
+  test('"quero cancelar" → CANCEL_PENDING', () => {
+    const state = makeState('AGUARDANDO_TIPO');
+    const result = intentRouter.classify('quero cancelar', state, COMPANY);
+    expect(result).not.toBeNull();
+    expect(result.intent).toBe('CANCEL_PENDING');
+  });
+
+  test('"cancela isso" → CANCEL_PENDING', () => {
+    const state = makeState('OFERECENDO_UPSELL');
+    const result = intentRouter.classify('cancela isso', state, COMPANY);
+    expect(result).not.toBeNull();
+    expect(result.intent).toBe('CANCEL_PENDING');
+  });
+
+  test('"cancela tudo" → CANCEL_PENDING', () => {
+    const state = makeState('CONFIRMANDO');
+    const result = intentRouter.classify('cancela tudo', state, COMPANY);
+    expect(result).not.toBeNull();
+    expect(result.intent).toBe('CANCEL_PENDING');
+  });
+
+  test('"nao quero mais nada" → CANCEL_PENDING', () => {
+    const state = makeState('MONTANDO_ACOMPANHAMENTO');
+    const result = intentRouter.classify('nao quero mais nada', state, COMPANY);
+    expect(result).not.toBeNull();
+    expect(result.intent).toBe('CANCEL_PENDING');
+  });
+
+  test('"arroz e feijão" NÃO dispara cancel (false positive guard)', () => {
+    const state = makeState('MONTANDO_ACOMPANHAMENTO');
+    const result = intentRouter.classify('arroz e feijão', state, COMPANY);
+    expect(result?.intent).not.toBe('CANCEL_PENDING');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// FRUSTRATION — _skipHumanize: false (deixa IA humanizar)
+// ═══════════════════════════════════════════════════════════════
+
+describe('detectFrustration — humanização ativa', () => {
+  test('FRUSTRATION não bloqueia humanização (_skipHumanize: false)', () => {
+    const state = makeState('MONTANDO_PROTEINA');
+    const result = intentRouter.classify('aff impossivel', state, COMPANY);
+    expect(result).not.toBeNull();
+    expect(result._skipHumanize).toBe(false);
+  });
+
+  test('FRUSTRATION retorna contexto de retomada da etapa', () => {
+    const state = makeState('AGUARDANDO_PAGAMENTO');
+    const result = intentRouter.classify('voce nao entende nada', state, COMPANY);
+    expect(result).not.toBeNull();
+    const resp = result.response.join(' ');
+    expect(resp).toMatch(/pix|cart[ãa]o|dinheiro|voltando/i);
   });
 });

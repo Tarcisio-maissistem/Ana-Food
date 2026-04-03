@@ -31,13 +31,23 @@ async function interpretConfirmation(text) {
   // Se ele está perguntando do resumo, valor ou algo assim, não é confirmação de fechamento
   if (/\bresumo|valor|total|preco|pagar\b/.test(lower)) return 'indefinido';
 
+  // Expressões compostas de negação que indicam rejeição (ANTES do check de modificação)
+  if (/muda tudo|quero mudar|ta errado|nao quero|nao preciso|cancela o pedido/.test(lower)) return 'nao';
+
   // Se contém intenção de modificar / adicionar / trocar → não é confirmação nem cancelamento
-  if (/\btrocar?\b|\badicionar?\b|\bcolocar?\b|\btirar?\b|\bretira\b|\bmudar?\b|\bsubstituir?\b|\bacrescenta\b|\bmais uma\b|\boutra marmita\b|\bantes de confirmar\b/.test(lower)) return 'indefinido';
+  if (/\btrocar?\b|\badicionar?\b|\bcolocar?\b|\btirar?\b|\bretira(r)?\b|\bmudar?\b|\bsubstituir?\b|\bacrescenta\b|\bmais uma\b|\boutra marmita\b|\bantes de confirmar\b|\bremover?\b|\bexclui(r)?\b/.test(lower)) return 'indefinido';
+
+  // "cancela o [item]" → é modificação (remover item), não cancelamento do pedido
+  // NÃO inclui "cancela o pedido" / "cancela tudo"
+  if (/\bcancela(r)?\s+(o|a|os|as|d[aoe]s?|esse?|essa?)\s*(refri|refrigerante|coca|suco|bebida|lata|guarana|fanta|agua|pudim|mousse|sobremesa|marmita)/i.test(lower)) return 'indefinido';
+
+  // "pode ser uma marmita pequena/grande" → mudança de tamanho, não confirmação
+  if (/\b(pequena|grande)\b/.test(lower) && /\b(marmita|pode ser|faz|quero)\b/.test(lower) && lower.length > 8) return 'indefinido';
 
   const palavras = lower.split(/\s+/);
   const palavraUnica = palavras.length === 1;
 
-  const positivos = new Set(['sim', 's', 'ok', 'pode', 'quero', 'vai', 'confirmo', 'manda', 'claro', 'certo', 'isso', 'exato', 'fechou']);
+  const positivos = new Set(['sim', 's', 'ok', 'pode', 'quero', 'vai', 'confirmo', 'confirma', 'manda', 'claro', 'certo', 'isso', 'exato', 'fechou', 'perfeito']);
   const negativos = new Set(['nao', 'n', 'cancela', 'errado', 'errei', 'muda', 'mudar', 'nope', 'nada']);
 
   if (palavraUnica) {
@@ -45,8 +55,8 @@ async function interpretConfirmation(text) {
     if (negativos.has(palavras[0])) return 'nao';
   }
 
-  if (/isso mesmo|tudo certo|pode ser|com certeza|sim pode|pode mandar|quero sim|ta certo|ta sim|aham|uhum|beleza|valeu|bora|show|agora sim|pode ir|pode continuar|ta bom assim|fechou assim/.test(lower)) return 'sim';
-  if (/nao quero|nao preciso|muda tudo|quero mudar|cancela o pedido|ta errado|remover/.test(lower)) return 'nao';
+  if (/isso mesmo|esse mesmo|tudo certo|ta certinho|pode ser|com certeza|sim pode|pode mandar|quero sim|ta certo|ta sim|aham|uhum|beleza|valeu|bora|show|agora sim|pode ir|pode continuar|ta bom assim|fechou assim|deixa assim|deixa assim mesmo/.test(lower)) return 'sim';
+  if (/nao quero|nao preciso|quero mudar|cancela o pedido|ta errado/.test(lower)) return 'nao';
 
   // Se mensagem começa com positivo E contém "não" depois → é comentário, não cancelamento
   const primeiraPalavra = palavras[0];
@@ -211,11 +221,11 @@ function matchFuzzy(input, opcao) {
     if (apelidos.some(a => a.startsWith(inp) || inp.startsWith(a.slice(0, 4)))) return true;
   }
 
-  // Match Levenshtein — distância máxima 1 para palavras >= 5 chars
-  // "custela" → "costela" (distância 1) ✅
-  if (inp.length >= 5 && nome.length >= 5) {
+  // Match Levenshtein — distância máxima 1 para palavras >= 4 chars
+  // "custela" → "costela" (distância 1) ✅, "aros" → "arroz" (apelido "arro") ✅
+  if (inp.length >= 4 && nome.length >= 4) {
     if (levenshteinDistance(inp, nome) <= 1) return true;
-    if (apelidos.some(a => a.length >= 5 && levenshteinDistance(inp, a) <= 1)) return true;
+    if (apelidos.some(a => a.length >= 4 && levenshteinDistance(inp, a) <= 1)) return true;
   }
 
   return false;
@@ -256,7 +266,7 @@ function interpretItensMultiplos(text, opcoesDisponiveis) {
 
 function interpretOrderType(text) {
   const lower = normalizar(text);
-  if (/\bentr[e]?g|e?treg|\bdelivery\b|\bmandar\b|\breceber/.test(lower)) return 'delivery';
+  if (/\bentr[e]?g|e?treg|\bdelivery\b|\bmanda(r)?\b|\breceber|\bmanda pra/.test(lower)) return 'delivery';
   if (/\bretir|\bbuscar\b|\bpegar\b|\bbalcao\b|\bloja\b|\bai\b/.test(lower)) return 'pickup';
   if (/^1$/.test(lower)) return 'delivery';
   if (/^2$/.test(lower)) return 'pickup';
@@ -332,74 +342,17 @@ function _classificarFastTrackLocal(text) {
   const lower = normalizar(text);
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // 1. EXTRAIR TAMANHOS E QUANTIDADES
-  // ═══════════════════════════════════════════════════════════════════════════
-  const marmitas = [];
-  
-  // Patterns: "3 grandes", "1 pequena", "duas grandes", "uma pequena"
-  // Também: "3 grade" (typo comum), "2 grand"
-  const numMap = {
-    'uma': 1, 'um': 1, 'duas': 2, 'dois': 2, 'tres': 3, 'três': 3,
-    'quatro': 4, 'cinco': 5, 'seis': 6
-  };
-  
-  // Pattern para "N grandes/pequenas"
-  const patternQtdTam = /(\d+|uma?|duas?|dois|tres|três|quatro|cinco|seis)\s*(grande[s]?|grade[s]?|pequena[s]?)/gi;
-  let match;
-  while ((match = patternQtdTam.exec(lower)) !== null) {
-    const qtyRaw = match[1].toLowerCase();
-    const qty = numMap[qtyRaw] || parseInt(qtyRaw, 10) || 1;
-    const tamRaw = match[2].toLowerCase();
-    const tamanho = /grande|grade/.test(tamRaw) ? 'Grande' : 'Pequena';
-    
-    // Verifica se já existe esse tamanho
-    const existing = marmitas.find(m => m.tamanho === tamanho);
-    if (existing) {
-      existing.quantidade += qty;
-    } else {
-      marmitas.push({
-        tamanho,
-        quantidade: qty,
-        proteinas: [],
-        acompanhamentos: [],
-        saladas: []
-      });
-    }
-  }
-  
-  // Se não encontrou tamanhos, não é fast track válido
-  if (marmitas.length === 0) {
-    return { sucesso: false };
-  }
-  
-  // ═══════════════════════════════════════════════════════════════════════════
-  // 2. EXTRAIR PROTEÍNAS
+  // MAPAS DE ITENS (usados na extração por segmento)
   // ═══════════════════════════════════════════════════════════════════════════
   const proteinasMap = {
+    'carne cozida': 'Carne Cozida',
     'frango': 'Frango',
     'churrasco': 'Churrasco', 'churasco': 'Churrasco',
     'costela': 'Costela',
     'linguica': 'Linguiça', 'linguiça': 'Linguiça', 'lingüiça': 'Linguiça',
-    'carne': 'Carne Cozida', 'carne cozida': 'Carne Cozida'
+    'carne': 'Carne Cozida'
   };
   
-  const proteinasEncontradas = [];
-  for (const [key, value] of Object.entries(proteinasMap)) {
-    if (lower.includes(key) && !proteinasEncontradas.includes(value)) {
-      proteinasEncontradas.push(value);
-    }
-  }
-  
-  // Aplica proteínas em todos os grupos
-  if (proteinasEncontradas.length > 0) {
-    for (const m of marmitas) {
-      m.proteinas = proteinasEncontradas.slice(0, 2);
-    }
-  }
-  
-  // ═══════════════════════════════════════════════════════════════════════════
-  // 3. EXTRAIR ACOMPANHAMENTOS
-  // ═══════════════════════════════════════════════════════════════════════════
   const acompMap = {
     'arroz': 'Arroz',
     'feijao': 'Feijão', 'feijão': 'Feijão',
@@ -408,23 +361,6 @@ function _classificarFastTrackLocal(text) {
     'tropeiro': 'Tropeiro'
   };
   
-  const acompEncontrados = [];
-  for (const [key, value] of Object.entries(acompMap)) {
-    if (lower.includes(key) && !acompEncontrados.includes(value)) {
-      acompEncontrados.push(value);
-    }
-  }
-  
-  // Aplica acompanhamentos em todos os grupos
-  if (acompEncontrados.length > 0) {
-    for (const m of marmitas) {
-      m.acompanhamentos = acompEncontrados.slice(0, 2);
-    }
-  }
-  
-  // ═══════════════════════════════════════════════════════════════════════════
-  // 4. EXTRAIR SALADAS
-  // ═══════════════════════════════════════════════════════════════════════════
   const saladaMap = {
     'maionese': 'Maionese', 'maiornese': 'Maionese', 'maioneze': 'Maionese',
     'beterraba': 'Beterraba',
@@ -432,18 +368,125 @@ function _classificarFastTrackLocal(text) {
     'repolho': 'Repolho',
     'pepino': 'Pepino'
   };
-  
-  const saladasEncontradas = [];
-  for (const [key, value] of Object.entries(saladaMap)) {
-    if (lower.includes(key) && !saladasEncontradas.includes(value)) {
-      saladasEncontradas.push(value);
+
+  // Helper: extrai itens de um mapa dentro de um segmento de texto
+  function _extrairItens(segmento, mapa, max) {
+    const encontrados = [];
+    for (const [key, value] of Object.entries(mapa)) {
+      if (segmento.includes(key) && !encontrados.includes(value)) {
+        encontrados.push(value);
+      }
     }
+    return encontrados.slice(0, max || 2);
   }
   
-  // Aplica saladas em todos os grupos
-  if (saladasEncontradas.length > 0) {
-    for (const m of marmitas) {
-      m.saladas = saladasEncontradas.slice(0, 2);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 1. EXTRAIR TAMANHOS, QUANTIDADES E POSIÇÕES
+  // ═══════════════════════════════════════════════════════════════════════════
+  const gruposRaw = []; // { tamanho, quantidade, startPos, endPos }
+  
+  const numMap = {
+    'uma': 1, 'um': 1, 'duas': 2, 'dois': 2, 'tres': 3, 'três': 3,
+    'quatro': 4, 'cinco': 5, 'seis': 6
+  };
+  
+  const patternQtdTam = /(\d+|uma?|duas?|dois|tres|três|quatro|cinco|seis)\s*(?:marmitas?\s+)?(grande[s]?|grade[s]?|pequena[s]?)/gi;
+  let match;
+  while ((match = patternQtdTam.exec(lower)) !== null) {
+    const qtyRaw = match[1].toLowerCase();
+    const qty = numMap[qtyRaw] || parseInt(qtyRaw, 10) || 1;
+    const tamRaw = match[2].toLowerCase();
+    const tamanho = /grande|grade/.test(tamRaw) ? 'Grande' : 'Pequena';
+    
+    gruposRaw.push({
+      tamanho,
+      quantidade: qty,
+      matchEnd: match.index + match[0].length
+    });
+  }
+  
+  if (gruposRaw.length === 0) {
+    return { sucesso: false };
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 2. SEGMENTAR TEXTO POR GRUPO E EXTRAIR ITENS POR SEGMENTO
+  //    "3 grandes com churrasco arroz feijão alface e 1 pequena com carne..."
+  //    → segmento1: "com churrasco arroz feijão alface"
+  //    → segmento2: "com carne cozida maionese alface arroz feijão"
+  // ═══════════════════════════════════════════════════════════════════════════
+  const segments = [];
+  for (let i = 0; i < gruposRaw.length; i++) {
+    const start = gruposRaw[i].matchEnd;
+    // Segmento vai até o início do próximo grupo, ou até palavras-chave de
+    // tipo/pagamento/bebida, ou fim do texto
+    let end;
+    if (i + 1 < gruposRaw.length) {
+      // Busca o início do texto que leva ao próximo grupo:
+      // "... alface e 1 pequena ..." → corta antes do "e 1" ou "e uma"
+      const nextGroupText = lower.substring(start);
+      const nextGroupPattern = /\s+e\s+(?:\d+|uma?|duas?|dois|tres|três|quatro|cinco|seis)\s/i;
+      const nextMatch = nextGroupPattern.exec(nextGroupText);
+      end = nextMatch ? start + nextMatch.index : gruposRaw[i + 1].matchEnd - 20;
+    } else {
+      end = lower.length;
+    }
+    segments.push(lower.substring(start, end));
+  }
+  
+  // Detecta se os segmentos indicam itens DIFERENTES por grupo
+  // Se apenas 1 grupo, ou se "todas com" / "tudo com" aparece, usa modo compartilhado
+  const temTodas = /\btodas?\s+com\b|\btudo\s+com\b/.test(lower);
+  const multiGrupo = gruposRaw.length > 1 && !temTodas;
+  
+  // Verifica se cada segmento tem conteúdo de itens (proteínas)
+  const segmentosComItens = segments.map(seg => {
+    const temProteina = Object.keys(proteinasMap).some(k => seg.includes(k));
+    return temProteina;
+  });
+  const cadaGrupoTemItens = multiGrupo && segmentosComItens.every(Boolean);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 3. CONSTRUIR MARMITAS COM ITENS POR GRUPO OU COMPARTILHADOS
+  // ═══════════════════════════════════════════════════════════════════════════
+  const marmitas = [];
+  
+  if (cadaGrupoTemItens) {
+    // MODO POR GRUPO: cada segmento define seus próprios itens
+    for (let i = 0; i < gruposRaw.length; i++) {
+      const seg = segments[i];
+      const existing = marmitas.find(m => m.tamanho === gruposRaw[i].tamanho);
+      if (existing) {
+        existing.quantidade += gruposRaw[i].quantidade;
+      } else {
+        marmitas.push({
+          tamanho: gruposRaw[i].tamanho,
+          quantidade: gruposRaw[i].quantidade,
+          proteinas: _extrairItens(seg, proteinasMap, 2),
+          acompanhamentos: _extrairItens(seg, acompMap, 2),
+          saladas: _extrairItens(seg, saladaMap, 2)
+        });
+      }
+    }
+  } else {
+    // MODO COMPARTILHADO: itens do texto todo aplicados a cada grupo
+    const proteinasGlobal = _extrairItens(lower, proteinasMap, 2);
+    const acompGlobal = _extrairItens(lower, acompMap, 2);
+    const saladasGlobal = _extrairItens(lower, saladaMap, 2);
+    
+    for (const g of gruposRaw) {
+      const existing = marmitas.find(m => m.tamanho === g.tamanho);
+      if (existing) {
+        existing.quantidade += g.quantidade;
+      } else {
+        marmitas.push({
+          tamanho: g.tamanho,
+          quantidade: g.quantidade,
+          proteinas: [...proteinasGlobal],
+          acompanhamentos: [...acompGlobal],
+          saladas: [...saladasGlobal]
+        });
+      }
     }
   }
   
@@ -451,7 +494,7 @@ function _classificarFastTrackLocal(text) {
   // 5. EXTRAIR TIPO (delivery/pickup)
   // ═══════════════════════════════════════════════════════════════════════════
   let tipo = null;
-  if (/\b(retira|retirar|buscar|balcao|balcão|pegar|vou\s+buscar|vou\s+pegar)\b/.test(lower)) {
+  if (/\b(retirada|retirar|retira|buscar|balcao|balcão|pegar|vou\s+buscar|vou\s+pegar)\b/.test(lower)) {
     tipo = 'pickup';
   } else if (/\b(entrega|delivery|manda|leva|enviar|entregar)\b/.test(lower)) {
     tipo = 'delivery';
@@ -605,7 +648,125 @@ Exemplos:
   return null;
 }
 
+// ─── MODIFICAÇÃO LOCAL (SEM IA) ──────────────────────────────────────────────
+
+/**
+ * Interpreta modificações de pedido localmente via regex.
+ * Cobre casos comuns: trocar/remover/adicionar extras, cancelar item específico.
+ * Retorna novo array de itens ou null se não conseguiu interpretar.
+ */
+function _modificarPedidoLocal(text, currentItems, menu) {
+  const lower = normalizar(text);
+  const items = JSON.parse(JSON.stringify(currentItems));
+  let modificou = false;
+
+  // Mapa de apelidos para bebidas/extras do cardápio
+  const extrasMap = {};
+  for (const b of (menu.upsellsBebida || [])) {
+    extrasMap[normalizar(b.name)] = b;
+    for (const a of (b.apelidos || [])) {
+      extrasMap[normalizar(a)] = b;
+    }
+  }
+  for (const s of (menu.upsellsSobremesa || [])) {
+    extrasMap[normalizar(s.name)] = s;
+    for (const a of (s.apelidos || [])) {
+      extrasMap[normalizar(a)] = s;
+    }
+  }
+
+  // Helper: encontra extra no cardápio por texto
+  function findExtra(txt) {
+    const t = normalizar(txt);
+    if (extrasMap[t]) return extrasMap[t];
+    // Tenta sem 's' final (plural: sucos→suco, pudins→pudim, cocas→coca)
+    const tSemPlural = t.replace(/ins$/, 'im').replace(/s$/, '');
+    if (tSemPlural !== t && extrasMap[tSemPlural]) return extrasMap[tSemPlural];
+    for (const key of Object.keys(extrasMap)) {
+      if (t.includes(key) || key.includes(t)) return extrasMap[key];
+      if (tSemPlural !== t && (tSemPlural.includes(key) || key.includes(tSemPlural))) return extrasMap[key];
+    }
+    return null;
+  }
+
+  // Helper: encontra extra existente no pedido por nome
+  function findExtraInOrder(nomeExtra) {
+    const normName = normalizar(nomeExtra);
+    return items.findIndex(i => i.tipo === 'extra' && normalizar(i.name).includes(normName.split(' ')[0]));
+  }
+
+  // ─── 1. TROCAR EXTRA: "troca o refri pelo suco", "troca coca por suco" ───
+  const trocaMatch = lower.match(/(?:troca|trocar|substitui|substituir)\s+(?:o|a|os|as)?\s*(.+?)\s+(?:por|pelo|pela|pelos|pelas)\s+(.+)/);
+  if (trocaMatch) {
+    const extraOrigem = findExtra(trocaMatch[1].trim());
+    const extraDestino = findExtra(trocaMatch[2].trim());
+    if (extraOrigem && extraDestino) {
+      const idx = findExtraInOrder(extraOrigem.name);
+      if (idx >= 0) {
+        const qtdOriginal = items[idx].quantity || 1;
+        // Verifica se já existe o item destino no pedido → merge
+        const idxDestino = items.findIndex((it, i) => i !== idx && it.tipo === 'extra' && normalizar(it.name) === normalizar(extraDestino.name));
+        if (idxDestino >= 0) {
+          items[idxDestino].quantity = (items[idxDestino].quantity || 1) + qtdOriginal;
+          items.splice(idx, 1);
+        } else {
+          items[idx].name = extraDestino.name;
+          items[idx].price = extraDestino.price;
+          items[idx].quantity = qtdOriginal;
+        }
+        modificou = true;
+      }
+    }
+  }
+
+  // ─── 2. REMOVER EXTRA: "retira o refri", "remove o suco", "tira a coca",
+  //        "cancela o refrigerante", "sem refrigerante" ───
+  if (!modificou) {
+    const removeMatch = lower.match(/(?:retira|retirar|remove|remover|tira|tirar|cancela|cancelar|exclui|excluir|sem)\s+(?:o|a|os|as|d[aoe]s?|esse?|essa?)?\s*(.+)/);
+    if (removeMatch) {
+      const alvo = removeMatch[1].trim();
+      const extraAlvo = findExtra(alvo);
+      if (extraAlvo) {
+        const idx = findExtraInOrder(extraAlvo.name);
+        if (idx >= 0) {
+          items.splice(idx, 1);
+          modificou = true;
+        }
+      }
+    }
+  }
+
+  // ─── 3. ADICIONAR EXTRA: "adiciona 2 sucos", "coloca mais um refri" ───
+  if (!modificou) {
+    const addMatch = lower.match(/(?:adiciona|adicionar|coloca|colocar|bota|botar|inclui|incluir|mais)\s+(?:mais\s+)?(\d+|uma?|dois|duas|tres|três|quatro|cinco)?\s*(.+)/);
+    if (addMatch) {
+      const PALAVRAS_NUM = { 'um': 1, 'uma': 1, 'dois': 2, 'duas': 2, 'tres': 3, 'três': 3, 'quatro': 4, 'cinco': 5 };
+      let qty = 1;
+      if (addMatch[1]) {
+        qty = parseInt(addMatch[1]) || PALAVRAS_NUM[addMatch[1]] || 1;
+      }
+      const alvo = addMatch[2].trim();
+      const extraAlvo = findExtra(alvo);
+      if (extraAlvo) {
+        const idx = findExtraInOrder(extraAlvo.name);
+        if (idx >= 0) {
+          items[idx].quantity = (items[idx].quantity || 1) + qty;
+        } else {
+          items.push({ tipo: 'extra', name: extraAlvo.name, price: extraAlvo.price, quantity: qty });
+        }
+        modificou = true;
+      }
+    }
+  }
+
+  return modificou ? items : null;
+}
+
 async function interpretarModificacaoPedido(text, currentItems, menu) {
+  // Tenta modificação LOCAL primeiro (sem depender de OpenAI)
+  const localResult = _modificarPedidoLocal(text, currentItems, menu);
+  if (localResult) return localResult;
+
   if (!process.env.OPENAI_API_KEY) return null;
 
   const prompt = `
@@ -745,10 +906,15 @@ async function generateHumanResponse(userText, internalInstruction, stateContext
 ${basePrompt}
 
 Sua missão é pegar a [INSTRUÇÃO DO SISTEMA] abaixo e transformar numa mensagem natural para o WhatsApp.
-REGRAS: 1. NUNCA confirme nada se a instrução for uma pergunta. 2. Seja fiel à instrução. 3. Use estilo de chat.
+REGRAS OBRIGATÓRIAS:
+1. NUNCA confirme nada se a instrução for uma pergunta.
+2. Seja 100% FIEL à instrução — se ela fala de BEBIDA, NÃO mencione proteína/acompanhamento e vice-versa.
+3. Use estilo de chat. Seja breve (máximo 2-3 linhas).
+4. NÃO adicione "Olá", "Oi" ou saudações — vá direto ao assunto.
+5. NÃO invente opções que não estão na instrução.
+6. NÃO repita o pedido inteiro — foque apenas no que a instrução pede.
 
 O cliente disse: "${userText || ''}"
-Contexto: ${JSON.stringify(stateContext)}
 
 [INSTRUÇÃO DO SISTEMA]:
 ${internalInstruction}
@@ -904,5 +1070,7 @@ module.exports = {
   reflectAndImprovePrompt,
   interpretarModificacaoPedido,
   interpretarProteinasMultiplas,
-  interpretarPedidoMultiTamanho
+  interpretarPedidoMultiTamanho,
+  _classificarFastTrackLocal,
+  _modificarPedidoLocal
 };

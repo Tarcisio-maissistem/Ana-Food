@@ -154,6 +154,9 @@ function detectDrinkCorrection(lower, state) {
   const etapasAtivas = ['AGUARDANDO_TIPO', 'AGUARDANDO_ENDERECO', 'AGUARDANDO_PAGAMENTO', 'CONFIRMANDO'];
   if (!etapasAtivas.includes(state.etapa)) return null;
 
+  // Se é um comando de modificação (adiciona/troca/retira/coloca), deixa o handler processar
+  if (/\b(adiciona|adicionar|troca|trocar|retira|retirar|remove|remover|tira|tirar|coloca|colocar|substitui|substituir|sem|exclui|excluir|cancela|cancelar)\b/.test(lower)) return null;
+
   // Detecta menção a bebidas
   const bebidaRegex = /coca|refri|refrigerante|suco|lata|guarana|fanta|bebida/;
   if (!bebidaRegex.test(lower)) return null;
@@ -287,21 +290,40 @@ function detectQuantityCorrection(lower, state) {
  * "cancela", "cancelar", "desisti", "não quero mais", "para"
  */
 function detectCancel(lower, state) {
-  if (!/^cancela$|^cancelar$|^para$|nao quero mais|desisti|desisto/.test(lower)) return null;
+  // Em FINALIZADO, cancelamento pós-pedido é tratado pelo handlePosPedido
+  if (state && state.etapa === 'FINALIZADO') return null;
 
-  // Se já estava confirmando cancelamento, cancela de vez
+  // Se já estava aguardando confirmação de cancelamento
   if (state._confirmandoCancelamento) {
+    // Verifica se o usuário disse SIM (confirma cancelamento)
+    const isConfirm = /^(sim|s|cancela|cancelar|pode|ok|claro|quero|manda)$/.test(lower.trim()) ||
+      /sim.*cancela|pode.*cancelar|quero.*cancelar/.test(lower);
+    if (isConfirm) {
+      state._confirmandoCancelamento = false;
+      // Salva backup antes de cancelar (permite retomar com "continuar")
+      if (state.pedidoAtual && state.pedidoAtual.items && state.pedidoAtual.items.length > 0) {
+        state._pedidoBackup = JSON.parse(JSON.stringify(state.pedidoAtual));
+      }
+      state.etapa = 'INICIO';
+      state.pedidoAtual = { items: [], type: null, address: null, paymentMethod: null, deliveryFee: 0, trocoPara: null };
+      state._marmitaAtual = null;
+      state._loopCount = 0;
+      return {
+        intent: 'CANCEL_CONFIRMED',
+        response: 'Pedido cancelado. Se quiser pedir de novo, é só chamar! 😊',
+        _skipHumanize: true
+      };
+    }
+    // Qualquer outra coisa (não, outra frase, modificação) → limpa flag e deixa handler processar
     state._confirmandoCancelamento = false;
-    state.etapa = 'INICIO';
-    state.pedidoAtual = { items: [], type: null, address: null, paymentMethod: null, deliveryFee: 0, trocoPara: null };
-    state._marmitaAtual = null;
-    state._loopCount = 0;
-    return {
-      intent: 'CANCEL_CONFIRMED',
-      response: 'Pedido cancelado. Se quiser pedir de novo, é só chamar! 😊',
-      _skipHumanize: true
-    };
+    return null;
   }
+
+  if (!/\bcancela(r)?\b|^para$|nao quero mais|desisti(r)?|desisto|quero cancelar|pode cancelar|cancela isso|cancela tudo|nao quero mais nada/.test(lower)) return null;
+
+  // Se "cancela" é seguido de item específico → é modificação, não cancelamento do pedido
+  const cancelaItem = /\bcancela(r)?\s+(o|a|os|as|d[aoe]s?|esse?|essa?)?\s*(refri|refrigerante|coca|suco|bebida|lata|guarana|fanta|agua|pudim|mousse|sobremesa)/i;
+  if (cancelaItem.test(lower)) return null;
 
   // Primeira vez: pede confirmação
   state._confirmandoCancelamento = true;
@@ -360,13 +382,20 @@ function detectFrustration(lower, state) {
 
   const contexto = _contextoEtapa(state.etapa);
 
+  const respostas = [
+    'Desculpa, tô aqui para facilitar! Vamos resolver isso rapidinho 😊',
+    'Opa, me desculpa pela confusão! Bora do começo 🙏',
+    'Xiii, me perdoa! Deixa eu te ajudar de um jeito mais simples 😊'
+  ];
+  const resposta = respostas[Math.floor(Math.random() * respostas.length)];
+
   return {
     intent: 'FRUSTRATION',
     response: [
-      'Desculpa se compliquei! 😅',
-      contexto || 'Quer continuar o pedido ou prefere cancelar?'
+      resposta,
+      contexto || 'Quer continuar ou prefere recomeçar do zero?'
     ].filter(Boolean),
-    _skipHumanize: true
+    _skipHumanize: false
   };
 }
 

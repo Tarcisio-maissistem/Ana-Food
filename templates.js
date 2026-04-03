@@ -80,9 +80,13 @@ function tamanhoNaoEntendido() {
 
 // ─── MONTAGEM DA MARMITA ──────────────────────────────────────────────────────
 
-function pedirProteina(qteMarmitas = 1) {
+function pedirProteina(qteMarmitas = 1, proteinas = null) {
   const prefixo = qteMarmitas > 1 ? `Vamos montar a primeira 👇\n\n` : `Perfeito 👍\n\n`;
-  return `${prefixo}Escolha até *2 proteínas*:\n🍗 Frango\n🥩 Churrasco\n🍖 Costela\n🌭 Linguiça\n🥩 Carne Cozida`;
+  if (proteinas && proteinas.length > 0) {
+    const lista = proteinas.map(p => `• ${p.name}`).join('\n');
+    return `${prefixo}Escolha até *2 proteínas*:\n${lista}`;
+  }
+  return `${prefixo}Escolha até *2 proteínas*:\n🍗 Frango\n🥩 Churrasco\n🍖 Costela\n🌭 Linguiça\n🍖 Carne Cozida`;
 }
 
 function proteinaNaoEntendida() {
@@ -104,8 +108,12 @@ function acompanhamentoNaoEntendido() {
   return `Por favor, escolha entre: Arroz, Feijão, Macarrão, Purê ou Tropeiro.`;
 }
 
-function pedirSalada() {
-  return `E *2 saladas*?\n🥗 Maionese\n🥗 Beterraba\n🥗 Alface\n🥗 Repolho\n🥒 Pepino`;
+function pedirSalada(saladas = null) {
+  if (saladas && saladas.length > 0) {
+    const lista = saladas.map(s => `• ${s.name}`).join('\n');
+    return `Quer adicionar salada? _(até 2 — pode pular)_\n${lista}`;
+  }
+  return `Quer adicionar salada? _(até 2 — pode pular)_\n🥗 Maionese\n🥗 Beterraba\n🥗 Alface\n🥗 Repolho\n🥒 Pepino`;
 }
 
 function saladaNaoEntendida() {
@@ -155,7 +163,7 @@ function tipoNaoIdentificado() {
 // ─── ENDEREÇO E PAGAMENTO ─────────────────────────────────────────────────────
 
 function pedirEndereco() {
-  return `Endereço para entrega?`;
+  return `Me passa o endereço de entrega! Rua, número e bairro 😊`;
 }
 
 function confirmarEndereco(endereco, taxa) {
@@ -301,7 +309,7 @@ function contextoEtapa(etapa) {
     'MONTANDO_TAMANHO': 'Qual tamanho prefere?',
     'MONTANDO_PROTEINA': 'Voltando ao pedido: quais as proteínas?',
     'MONTANDO_ACOMPANHAMENTO': 'E os acompanhamentos?',
-    'MONTANDO_SALADA': 'E os acompanhamentos e saladas?',
+    'MONTANDO_SALADA': 'E as saladas? _(pode pular)_',
     'OFERECENDO_UPSELL': 'Quer adicionar bebida ou sobremesa?',
     'AGUARDANDO_TIPO': 'Vai ser entrega ou retirada?',
     'AGUARDANDO_ENDERECO': 'Qual o endereço para entrega?',

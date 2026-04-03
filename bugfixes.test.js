@@ -1837,15 +1837,17 @@ describe('Bugs v5 — FAQ lateral e resumo completo', () => {
     const smProcess = require('./stateMachine').process;
 
     test('após upsell mostra todas as marmitas + bebidas', async () => {
-      // Simula estado após completar todas as marmitas e escolher bebidas
+      // Simula estado após completar bebidas (fase sobremesa), bebidas já no pedido
       const state = {
         etapa: 'OFERECENDO_UPSELL',
-        _upsellPhase: 'bebida',
+        _upsellPhase: 'sobremesa',
         pedidoAtual: {
           items: [
             { tipo: 'marmita', tamanho: 'Grande', price: 22, proteinas: [{name:'Frango'}], acompanhamentos: [{name:'Arroz'}], saladas: [] },
             { tipo: 'marmita', tamanho: 'Pequena', price: 20, proteinas: [{name:'Costela'}], acompanhamentos: [{name:'Feijão'}], saladas: [{name:'Alface'}] },
-            { tipo: 'marmita', tamanho: 'Pequena', price: 20, proteinas: [{name:'Costela'}], acompanhamentos: [{name:'Feijão'}], saladas: [{name:'Alface'}] }
+            { tipo: 'marmita', tamanho: 'Pequena', price: 20, proteinas: [{name:'Costela'}], acompanhamentos: [{name:'Feijão'}], saladas: [{name:'Alface'}] },
+            { tipo: 'extra', name: 'Suco Natural', price: 8, quantity: 3 },
+            { tipo: 'extra', name: 'Refrigerante Lata', price: 6, quantity: 2 }
           ],
           type: null,
           address: null,
@@ -1854,22 +1856,22 @@ describe('Bugs v5 — FAQ lateral e resumo completo', () => {
         }
       };
 
-      const result = await smProcess(COMPANY_ID, PHONE, '3 sucos e 2 refris', state, COMPANY);
+      const result = await smProcess(COMPANY_ID, PHONE, 'não quero', state, COMPANY);
 
       const texto = Array.isArray(result.response) ? result.response.join(' ') : result.response;
-      
+
       // Deve mostrar TODAS as marmitas
       expect(texto).toMatch(/Grande/i);
       expect(texto).toMatch(/Pequena/i);
-      
+
       // Deve mostrar as bebidas
       expect(texto).toMatch(/Suco/i);
       expect(texto).toMatch(/Refri/i);
-      
+
       // Deve perguntar tipo
       expect(texto.toLowerCase()).toMatch(/entrega|retirada/i);
-      
-      // 5 items (3 marmitas + 2 bebidas)
+
+      // 5 items (3 marmitas + 2 bebidas, sem sobremesa)
       expect(result.state.pedidoAtual.items.length).toBe(5);
     });
 
@@ -2016,9 +2018,10 @@ describe('Bugs v6 — Resumo completo antes do pagamento', () => {
   });
 
   test('fluxo completo: após upsell mostra resumo completo com saladas', async () => {
+    // Simula fase sobremesa (bebidas já anotadas), rejeita sobremesa
     let state = {
       etapa: 'OFERECENDO_UPSELL',
-      _upsellPhase: 'bebida',
+      _upsellPhase: 'sobremesa',
       pedidoAtual: {
         items: [
           {
@@ -2029,7 +2032,8 @@ describe('Bugs v6 — Resumo completo antes do pagamento', () => {
             proteinas: [{ name: 'Churrasco' }],
             acompanhamentos: [{ name: 'Arroz' }, { name: 'Feijão' }],
             saladas: [{ name: 'Alface' }, { name: 'Tomate' }]
-          }
+          },
+          { tipo: 'extra', name: 'Suco Natural', price: 8, quantity: 2 }
         ],
         type: null,
         address: null,
@@ -2037,10 +2041,10 @@ describe('Bugs v6 — Resumo completo antes do pagamento', () => {
         deliveryFee: 0
       }
     };
-    
-    const result = await smProcess('c1', '5511999', '2 sucos', state, COMPANY);
+
+    const result = await smProcess('c1', '5511999', 'não quero', state, COMPANY);
     const texto = result.response.join('\n');
-    
+
     // Resumo deve incluir saladas
     expect(texto).toMatch(/Alface/i);
     expect(texto).toMatch(/Tomate/i);
@@ -2294,10 +2298,10 @@ describe('Bug v6 — Resumo completo ao perguntar entrega/retirada', () => {
   };
 
   test('fluxo 3 marmitas + 2 bebidas: resumo mostra TUDO antes de entrega/retirada', async () => {
-    // Simula state após upsell com 3 marmitas (2 grandes + 1 pequena) e bebidas
+    // Simula fase sobremesa (bebidas já anotadas), rejeita sobremesa para ir a AGUARDANDO_TIPO
     const state = {
       etapa: 'OFERECENDO_UPSELL',
-      _upsellPhase: 'bebida',
+      _upsellPhase: 'sobremesa',
       pedidoAtual: {
         items: [
           {
@@ -2326,7 +2330,9 @@ describe('Bug v6 — Resumo completo ao perguntar entrega/retirada', () => {
             proteinas: [{ name: 'Costela' }],
             acompanhamentos: [{ name: 'Purê' }],
             saladas: [{ name: 'Beterraba' }]
-          }
+          },
+          { tipo: 'extra', name: 'Suco Natural', price: 8, quantity: 2 },
+          { tipo: 'extra', name: 'Refrigerante Lata', price: 6, quantity: 3 }
         ],
         type: null,
         address: null,
@@ -2334,9 +2340,9 @@ describe('Bug v6 — Resumo completo ao perguntar entrega/retirada', () => {
         deliveryFee: 0
       }
     };
-    
-    // Adiciona bebidas no upsell
-    const result = await smProcess('c1', '5511999', '2 sucos e 3 refri', state, COMPANY);
+
+    // Rejeita sobremesa, vai direto para AGUARDANDO_TIPO com resumo completo
+    const result = await smProcess('c1', '5511999', 'não quero', state, COMPANY);
     
     // Deve ir para AGUARDANDO_TIPO
     expect(result.state.etapa).toBe('AGUARDANDO_TIPO');
@@ -2371,9 +2377,10 @@ describe('Bug v6 — Resumo completo ao perguntar entrega/retirada', () => {
   });
 
   test('fluxo 3 grandes idênticas + 1 suco: agrupa corretamente', async () => {
+    // Fase sobremesa com suco já no pedido, rejeita sobremesa
     const state = {
       etapa: 'OFERECENDO_UPSELL',
-      _upsellPhase: 'bebida',
+      _upsellPhase: 'sobremesa',
       pedidoAtual: {
         items: [
           {
@@ -2402,7 +2409,8 @@ describe('Bug v6 — Resumo completo ao perguntar entrega/retirada', () => {
             proteinas: [{ name: 'Churrasco' }],
             acompanhamentos: [{ name: 'Macarrão' }],
             saladas: [{ name: 'Repolho' }]
-          }
+          },
+          { tipo: 'extra', name: 'Suco Natural', price: 8, quantity: 1 }
         ],
         type: null,
         address: null,
@@ -2410,8 +2418,8 @@ describe('Bug v6 — Resumo completo ao perguntar entrega/retirada', () => {
         deliveryFee: 0
       }
     };
-    
-    const result = await smProcess('c1', '5511999', '1 suco', state, COMPANY);
+
+    const result = await smProcess('c1', '5511999', 'não quero', state, COMPANY);
     
     const texto = result.response.join('\n');
     
@@ -2435,9 +2443,10 @@ describe('Bug v6 — Resumo completo ao perguntar entrega/retirada', () => {
   });
 
   test('fluxo sem bebidas: mostra só marmitas', async () => {
+    // Fase sobremesa sem bebidas no pedido, rejeita sobremesa
     const state = {
       etapa: 'OFERECENDO_UPSELL',
-      _upsellPhase: 'bebida',
+      _upsellPhase: 'sobremesa',
       pedidoAtual: {
         items: [
           {
@@ -2465,7 +2474,7 @@ describe('Bug v6 — Resumo completo ao perguntar entrega/retirada', () => {
         deliveryFee: 0
       }
     };
-    
+
     const result = await smProcess('c1', '5511999', 'não quero', state, COMPANY);
     
     const texto = result.response.join('\n');
@@ -2588,20 +2597,25 @@ describe('Bug v6 — Resumo completo ao perguntar entrega/retirada', () => {
     expect(state.etapa).toBe('OFERECENDO_UPSELL');
     
     // Bebidas
-    const result = await smProcess('c1', '5511999', '2 sucos e 1 refri', state, COMPANY);
-    
+    const r1 = await smProcess('c1', '5511999', '2 sucos e 1 refri', state, COMPANY);
+    // Bebidas adicionadas; agora oferece sobremesa (fase intermediária)
+    expect(r1.state.pedidoAtual.items.length).toBe(5); // 3 marmitas + 2 bebidas
+
+    // Rejeita sobremesa → vai para AGUARDANDO_TIPO com resumo completo
+    const result = await smProcess('c1', '5511999', 'não', r1.state, COMPANY);
+
     expect(result.state.etapa).toBe('AGUARDANDO_TIPO');
-    expect(result.state.pedidoAtual.items.length).toBe(5); // 3 marmitas + 2 bebidas
-    
+    expect(result.state.pedidoAtual.items.length).toBe(5); // ainda 3 marmitas + 2 bebidas
+
     const texto = result.response.join('\n');
-    
+
     // Deve mostrar 3x Marmita Grande
     expect(texto).toMatch(/3x.*Marmita Grande/i);
-    
+
     // Deve mostrar bebidas
     expect(texto).toMatch(/2x.*Suco/i);
     expect(texto).toMatch(/1x.*Refrigerante/i);
-    
+
     // Deve perguntar entrega/retirada
     expect(texto).toMatch(/Entrega.*Retirada/i);
   });

@@ -53,6 +53,15 @@ describe('interpretConfirmation', () => {
   test('❓ "quero adicionar mais uma marmita" = indefinido', async () => {
     expect(await interpretConfirmation('quero adicionar mais uma marmita')).toBe('indefinido');
   });
+  test('❓ "cancela o refrigerante" = indefinido (item específico, não pedido)', async () => {
+    expect(await interpretConfirmation('cancela o refrigerante')).toBe('indefinido');
+  });
+  test('❓ "retira o suco" = indefinido (modificação)', async () => {
+    expect(await interpretConfirmation('retira o suco')).toBe('indefinido');
+  });
+  test('❓ "remove a coca" = indefinido (modificação)', async () => {
+    expect(await interpretConfirmation('remove a coca')).toBe('indefinido');
+  });
   test('❓ "antes de confirmar quero adicionar" = indefinido', async () => {
     expect(await interpretConfirmation('antes de confirmar quero adicionar mais uma marmita grande')).toBe('indefinido');
   });
@@ -126,8 +135,12 @@ describe('interpretOrderType', () => {
     expect(interpretOrderType('2')).toBe('pickup');
   });
   test('Ô£à "retirada" = pickup', () => {
-    expect(interpretOrderType('vou retirar')).toBe('pickup');
-  });  // Typos comuns de clientes
+    expect(interpretOrderType('vou retirar')).toBe('pickup');  });
+  test('✅ "é pra retirada" = pickup', () => {
+    expect(interpretOrderType('é pra retirada')).toBe('pickup');
+  });
+  test('✅ "retirada no balcão" = pickup', () => {
+    expect(interpretOrderType('retirada no balcão')).toBe('pickup');  });  // Typos comuns de clientes
   test('✅ "etrega" (typo) = delivery', () => {
     expect(interpretOrderType('etrega')).toBe('delivery');
   });
@@ -376,5 +389,254 @@ describe('interpretarPedidoMultiTamanho', () => {
   test('❌ "oi quero pedir" (sem tamanho) → null', () => {
     const res = interpretarPedidoMultiTamanho('oi quero pedir');
     expect(res).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// _classificarFastTrackLocal — Fast track parsing completo
+// ═══════════════════════════════════════════════════════════════════════════
+const { _classificarFastTrackLocal } = require('./aiInterpreter');
+
+describe('_classificarFastTrackLocal', () => {
+  test('✅ pedido completo com retirada e pix', () => {
+    const ft = _classificarFastTrackLocal(
+      '3 marmitas grandes e uma pequena todas com churrasco arroz e feijao, e pra retirada e pagamento no pix'
+    );
+    expect(ft.sucesso).toBe(true);
+    expect(ft.marmitas).toHaveLength(2); // 2 grupos: grande e pequena
+    expect(ft.marmitas[0].tamanho).toBe('Grande');
+    expect(ft.marmitas[0].quantidade).toBe(3);
+    expect(ft.marmitas[1].tamanho).toBe('Pequena');
+    expect(ft.marmitas[1].quantidade).toBe(1);
+    expect(ft.tipo).toBe('pickup');
+    expect(ft.pagamento).toBe('Pix');
+  });
+
+  test('✅ "retirada" detecta pickup', () => {
+    const ft = _classificarFastTrackLocal('1 grande de frango retirada pix');
+    expect(ft.tipo).toBe('pickup');
+  });
+
+  test('✅ "retira" detecta pickup', () => {
+    const ft = _classificarFastTrackLocal('1 grande de frango retira no balcao pix');
+    expect(ft.tipo).toBe('pickup');
+  });
+
+  test('✅ "vou buscar" detecta pickup', () => {
+    const ft = _classificarFastTrackLocal('1 grande de frango vou buscar pix');
+    expect(ft.tipo).toBe('pickup');
+  });
+
+  test('✅ "entrega" detecta delivery', () => {
+    const ft = _classificarFastTrackLocal('2 grandes frango arroz feijao entrega cartao');
+    expect(ft.tipo).toBe('delivery');
+  });
+
+  test('✅ pagamento Pix detectado', () => {
+    const ft = _classificarFastTrackLocal('2 grandes frango arroz pix');
+    expect(ft.pagamento).toBe('Pix');
+  });
+
+  test('✅ pagamento cartão detectado', () => {
+    const ft = _classificarFastTrackLocal('2 grandes frango arroz cartao');
+    expect(ft.pagamento).toBe('Cartão');
+  });
+
+  test('✅ pagamento dinheiro detectado', () => {
+    const ft = _classificarFastTrackLocal('2 grandes frango arroz dinheiro');
+    expect(ft.pagamento).toBe('Dinheiro');
+  });
+
+  test('✅ sem tipo/pagamento retorna null para ambos', () => {
+    const ft = _classificarFastTrackLocal('2 grandes de frango com arroz e feijao');
+    expect(ft.tipo).toBeNull();
+    expect(ft.pagamento).toBeNull();
+  });
+
+  test('✅ 3 grandes e 1 pequena → 2 grupos com quantidades corretas', () => {
+    const ft = _classificarFastTrackLocal('quero 3 grandes e 1 pequena de churrasco');
+    expect(ft.sucesso).toBe(true);
+    expect(ft.marmitas).toHaveLength(2);
+    const grande = ft.marmitas.find(m => m.tamanho === 'Grande');
+    const pequena = ft.marmitas.find(m => m.tamanho === 'Pequena');
+    expect(grande.quantidade).toBe(3);
+    expect(pequena.quantidade).toBe(1);
+  });
+
+  test('✅ proteínas compartilhadas "todas com churrasco"', () => {
+    const ft = _classificarFastTrackLocal(
+      '3 grandes e 1 pequena todas com churrasco arroz e feijao'
+    );
+    expect(ft.sucesso).toBe(true);
+    ft.marmitas.forEach(m => {
+      expect(m.proteinas.map(p => p.toLowerCase())).toContain('churrasco');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Itens DIFERENTES por grupo (bug #2 corrigido)
+  // ═══════════════════════════════════════════════════════════════════════════
+  test('✅ itens diferentes por grupo: grandes churrasco, pequena carne cozida', () => {
+    const ft = _classificarFastTrackLocal(
+      'quero 3 marmitas grandes com churrasco arroz e feijao alface e 1 pequena com carne cozida maionese e alface arroz e feijao'
+    );
+    expect(ft.sucesso).toBe(true);
+    expect(ft.marmitas).toHaveLength(2);
+
+    const grande = ft.marmitas.find(m => m.tamanho === 'Grande');
+    const pequena = ft.marmitas.find(m => m.tamanho === 'Pequena');
+
+    // Grande: churrasco, arroz+feijão, alface
+    expect(grande.quantidade).toBe(3);
+    expect(grande.proteinas).toContain('Churrasco');
+    expect(grande.proteinas).not.toContain('Carne Cozida');
+    expect(grande.acompanhamentos).toEqual(expect.arrayContaining(['Arroz', 'Feijão']));
+    expect(grande.saladas).toContain('Alface');
+    expect(grande.saladas).not.toContain('Maionese');
+
+    // Pequena: carne cozida, arroz+feijão, maionese+alface
+    expect(pequena.quantidade).toBe(1);
+    expect(pequena.proteinas).toContain('Carne Cozida');
+    expect(pequena.proteinas).not.toContain('Churrasco');
+    expect(pequena.saladas).toEqual(expect.arrayContaining(['Maionese', 'Alface']));
+  });
+
+  test('✅ itens diferentes: grande frango, pequena linguiça', () => {
+    const ft = _classificarFastTrackLocal(
+      '2 grandes com frango arroz e macarrao e 1 pequena com linguica feijao e beterraba'
+    );
+    expect(ft.sucesso).toBe(true);
+    const grande = ft.marmitas.find(m => m.tamanho === 'Grande');
+    const pequena = ft.marmitas.find(m => m.tamanho === 'Pequena');
+
+    expect(grande.proteinas).toContain('Frango');
+    expect(grande.proteinas).not.toContain('Linguiça');
+    expect(grande.acompanhamentos).toEqual(expect.arrayContaining(['Arroz', 'Macarrão']));
+
+    expect(pequena.proteinas).toContain('Linguiça');
+    expect(pequena.proteinas).not.toContain('Frango');
+    expect(pequena.saladas).toContain('Beterraba');
+  });
+
+  test('✅ "todas com" → modo compartilhado, mesmo com múltiplos grupos', () => {
+    const ft = _classificarFastTrackLocal(
+      '2 grandes e 1 pequena todas com frango arroz feijao'
+    );
+    expect(ft.sucesso).toBe(true);
+    ft.marmitas.forEach(m => {
+      expect(m.proteinas).toContain('Frango');
+      expect(m.acompanhamentos).toEqual(expect.arrayContaining(['Arroz', 'Feijão']));
+    });
+  });
+
+  test('✅ "tudo com" → modo compartilhado', () => {
+    const ft = _classificarFastTrackLocal(
+      '3 grandes e 2 pequenas tudo com churrasco arroz e pure'
+    );
+    expect(ft.sucesso).toBe(true);
+    ft.marmitas.forEach(m => {
+      expect(m.proteinas).toContain('Churrasco');
+      expect(m.acompanhamentos).toEqual(expect.arrayContaining(['Arroz', 'Purê']));
+    });
+  });
+
+  test('✅ grupo único não afeta: 3 grandes com churrasco', () => {
+    const ft = _classificarFastTrackLocal(
+      '3 grandes com churrasco arroz feijao alface'
+    );
+    expect(ft.sucesso).toBe(true);
+    expect(ft.marmitas).toHaveLength(1);
+    expect(ft.marmitas[0].proteinas).toContain('Churrasco');
+    expect(ft.marmitas[0].saladas).toContain('Alface');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// _modificarPedidoLocal — Modificação LOCAL de extras
+// ═══════════════════════════════════════════════════════════════
+
+describe('_modificarPedidoLocal', () => {
+  const { _modificarPedidoLocal } = require('./aiInterpreter');
+  const cardapio = require('./plugins/marmitaria/cardapio');
+  const menu = {
+    proteinas: cardapio.PROTEINAS,
+    acompanhamentos: cardapio.ACOMPANHAMENTOS,
+    saladas: cardapio.SALADAS,
+    upsellsBebida: cardapio.BEBIDAS,
+    upsellsSobremesa: cardapio.SOBREMESAS
+  };
+
+  const baseItems = [
+    { tipo: 'marmita', tamanho: 'Grande', price: 22, quantity: 1, proteinas: [{name:'Churrasco'}], acompanhamentos: [{name:'Arroz'},{name:'Feijão'}], saladas: [{name:'Alface'}] },
+    { tipo: 'extra', name: 'Suco Natural', price: 8, quantity: 3 },
+    { tipo: 'extra', name: 'Refrigerante Lata', price: 6, quantity: 1 }
+  ];
+
+  test('"troca o refri pelo suco" → remove refri, soma qty no suco existente', () => {
+    const r = _modificarPedidoLocal('troca o refri pelo suco', baseItems, menu);
+    expect(r).not.toBeNull();
+    const extras = r.filter(i => i.tipo === 'extra');
+    expect(extras).toHaveLength(1);
+    expect(extras[0].name).toBe('Suco Natural');
+    expect(extras[0].quantity).toBe(4);
+  });
+
+  test('"retira o refrigerante" → remove refri, mantém suco', () => {
+    const r = _modificarPedidoLocal('retira o refrigerante', baseItems, menu);
+    expect(r).not.toBeNull();
+    const extras = r.filter(i => i.tipo === 'extra');
+    expect(extras).toHaveLength(1);
+    expect(extras[0].name).toBe('Suco Natural');
+    expect(extras[0].quantity).toBe(3);
+  });
+
+  test('"cancela o refrigerante" → remove refri', () => {
+    const r = _modificarPedidoLocal('cancela o refrigerante', baseItems, menu);
+    expect(r).not.toBeNull();
+    const extras = r.filter(i => i.tipo === 'extra');
+    expect(extras).toHaveLength(1);
+    expect(extras[0].name).toBe('Suco Natural');
+  });
+
+  test('"tira a coca" → remove refri (apelido)', () => {
+    const r = _modificarPedidoLocal('tira a coca', baseItems, menu);
+    expect(r).not.toBeNull();
+    const extras = r.filter(i => i.tipo === 'extra');
+    expect(extras).toHaveLength(1);
+    expect(extras[0].name).toBe('Suco Natural');
+  });
+
+  test('"adiciona 2 cocas" → incrementa qty do refri existente', () => {
+    const r = _modificarPedidoLocal('adiciona 2 cocas', baseItems, menu);
+    expect(r).not.toBeNull();
+    const refri = r.find(i => i.tipo === 'extra' && i.name === 'Refrigerante Lata');
+    expect(refri).toBeDefined();
+    expect(refri.quantity).toBe(3);
+  });
+
+  test('"sem refrigerante" → remove refri', () => {
+    const r = _modificarPedidoLocal('sem refrigerante', baseItems, menu);
+    expect(r).not.toBeNull();
+    const extras = r.filter(i => i.tipo === 'extra');
+    expect(extras).toHaveLength(1);
+  });
+
+  test('"troca suco por coca" sem suco no pedido → null', () => {
+    const items = [{ tipo: 'extra', name: 'Refrigerante Lata', price: 6, quantity: 1 }];
+    const r = _modificarPedidoLocal('troca suco por coca', items, menu);
+    expect(r).toBeNull();
+  });
+
+  test('"bla bla bla" (texto irrelevante) → null', () => {
+    const r = _modificarPedidoLocal('está chovendo hoje', baseItems, menu);
+    expect(r).toBeNull();
+  });
+
+  test('marmitas não são afetadas pela modificação de extras', () => {
+    const r = _modificarPedidoLocal('retira o refrigerante', baseItems, menu);
+    expect(r).not.toBeNull();
+    const marmitas = r.filter(i => i.tipo === 'marmita');
+    expect(marmitas).toHaveLength(1);
+    expect(marmitas[0].proteinas[0].name).toBe('Churrasco');
   });
 });

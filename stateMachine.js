@@ -54,13 +54,14 @@ const CARDAPIO_DEFAULT = {
     { name: 'Repolho' }, { name: 'Pepino' }
   ],
   upsellsBebida: [
-    { name: 'Suco Natural', price: 8 },
-    { name: 'Refrigerante Lata', price: 6, apelidos: ['refrigerante', 'refri', 'lata', 'coca'] },
-    { name: 'Refrigerante 2L', price: 10, apelidos: ['2l'] }
+    { name: 'Suco Natural', price: 8, apelidos: ['suco', 'natural', 'suquinho'] },
+    { name: 'Refrigerante Lata', price: 6, apelidos: ['refrigerante', 'refri', 'lata', 'coca', 'guarana'] },
+    { name: 'Refrigerante 2L', price: 10, apelidos: ['2l', 'dois litros', 'familia'] },
+    { name: 'Água Mineral', price: 3, apelidos: ['agua', 'água', 'mineral'] }
   ],
   upsellsSobremesa: [
-    { name: 'Pudim', price: 6 },
-    { name: 'Mousse', price: 6 }
+    { name: 'Pudim', price: 6, apelidos: ['pudim'] },
+    { name: 'Mousse', price: 6, apelidos: ['mousse', 'musse'] }
   ]
 };
 
@@ -368,7 +369,7 @@ async function process(companyId, phone, text, state, company) {
         resultado = handleSalada(text, state, cardapio);
         break;
       case 'OFERECENDO_UPSELL':
-        resultado = handleUpsell(text, state, cardapio);
+        resultado = handleUpsell(text, state, cardapio, company);
         break;
       case 'AGUARDANDO_TIPO':
         resultado = handleTipo(text, state, company);
@@ -507,6 +508,21 @@ async function handleInicio(companyId, phone, state, company, text, plugin) {
     state._awaitingPrefsConfirmation = false;
     state._lastOrderForRepeat = undefined;
   }
+
+  // ═════════════════════════════════════════════════════════════
+  // RETOMAR PEDIDO APÓS CANCELAMENTO — "continuar", "voltar"
+  // ═════════════════════════════════════════════════════════════
+  const lowerInicio = ai.normalizar(text);
+  if (state._pedidoBackup && /\bcontinua(r)?\b|\bvoltar?\b|\bretom(ar|a)\b|\bsim\b/.test(lowerInicio)) {
+    state.pedidoAtual = state._pedidoBackup;
+    state._pedidoBackup = null;
+    state.etapa = 'CONFIRMANDO';
+    const resumo = buildConfirmation(state, company);
+    resumo.response.unshift('Pedido restaurado! Confira o resumo:');
+    return resumo;
+  }
+  // Se decidiu não continuar, limpa o backup
+  state._pedidoBackup = null;
 
   resetPedido(state);
 
@@ -1343,7 +1359,7 @@ function handleSalada(text, state, cardapio) {
         state._marmitaAtual.saladas = [];
         // Continua abaixo para finalizar
       } else {
-        return { state, _skipHumanize: true, response: 'Saladas: *Alface, Tomate, Repolho, Beterraba* ou *Cenoura*?\n_(ou "pular" para continuar sem)_' };
+        return { state, _skipHumanize: true, response: 'Saladas: *Maionese, Beterraba, Alface, Repolho* ou *Pepino*?\n_(ou "pular" para continuar sem)_' };
       }
     }
   } else {
@@ -1400,13 +1416,13 @@ function handleSalada(text, state, cardapio) {
   };
 }
 
-function handleUpsell(text, state, cardapio) {
+function handleUpsell(text, state, cardapio, company) {
   const lower = ai.normalizar(text);
 
   // Detecta confusão/frustração: "de novo?", "já pedi", "hein?" — trata como "não quero"
-  if (/de novo|ja pedi|hein|que|como assim/.test(lower) && !/suco|refri|pudim|mousse|refrigerante/.test(lower)) {
-    state.etapa = 'AGUARDANDO_TIPO';
-    return { state, _skipHumanize: true, response: T.perguntarTipo(state.pedidoAtual.items) };
+  if (/de novo|ja pedi|hein|\bque\b|como assim/.test(lower) && !/suco|refri|pudim|mousse|refrigerante/.test(lower)) {
+    state._upsellDone = true;
+    return _avancarAposUpsell(state, company);
   }
 
   if (state._upsellPhase === 'bebida') {
@@ -1422,12 +1438,70 @@ function handleUpsell(text, state, cardapio) {
       });
     }
 
-    // Avança para o tipo — mostra resumo completo com extras
-    state.etapa = 'AGUARDANDO_TIPO';
-    return { state, _skipHumanize: true, response: T.perguntarTipo(state.pedidoAtual.items) };
+    // Se há sobremesas no cardápio, oferece antes de ir para tipo
+    const temSobremesas = cardapio.upsellsSobremesa && cardapio.upsellsSobremesa.length > 0;
+    if (temSobremesas && !state._upsellDone) {
+      state._upsellPhase = 'sobremesa';
+      const marmitaResumo = bebidas && bebidas.length > 0
+        ? `${bebidas.map(b => `${b.quantity || 1}x ${b.name}`).join(', ')} anotado! 👍`
+        : 'Sem bebida! 👍';
+      return { state, _skipHumanize: true, response: T.oferecerUpsellSobremesa(marmitaResumo) };
+    }
+
+    state._upsellDone = true;
+    return _avancarAposUpsell(state, company);
+  }
+
+  if (state._upsellPhase === 'sobremesa') {
+    const sobremesas = ai.interpretUpsell(text, cardapio.upsellsSobremesa || []);
+    if (sobremesas && sobremesas.length > 0) {
+      sobremesas.forEach(s => {
+        state.pedidoAtual.items.push({
+          tipo: 'extra',
+          name: s.name,
+          price: s.price,
+          quantity: s.quantity || 1
+        });
+      });
+    }
+
+    state._upsellDone = true;
+    return _avancarAposUpsell(state, company);
   }
 
   // Segurança fallback
+  state._upsellDone = true;
+  return _avancarAposUpsell(state, company);
+}
+
+/**
+ * Após upsell, verifica se tipo/pagamento já foram capturados (via fast track)
+ * e pula etapas que já estão preenchidas.
+ */
+function _avancarAposUpsell(state, company) {
+  const temTipo = !!state.pedidoAtual.type;
+  const temPagamento = !!state.pedidoAtual.paymentMethod;
+  const temEndereco = state.pedidoAtual.type === 'pickup' || !!state.pedidoAtual.address;
+
+  // Tudo preenchido → confirmação
+  if (temTipo && temEndereco && temPagamento) {
+    state.etapa = 'CONFIRMANDO';
+    return buildConfirmation(state, company);
+  }
+
+  // Tipo preenchido mas falta endereço (delivery)
+  if (temTipo && !temEndereco) {
+    state.etapa = 'AGUARDANDO_ENDERECO';
+    return { state, _skipHumanize: true, response: T.pedirEndereco() };
+  }
+
+  // Tipo preenchido, endereço ok, falta pagamento
+  if (temTipo && temEndereco && !temPagamento) {
+    state.etapa = 'AGUARDANDO_PAGAMENTO';
+    return { state, response: sugerirPagamento(state) };
+  }
+
+  // Nada preenchido → pergunta tipo normalmente
   state.etapa = 'AGUARDANDO_TIPO';
   return { state, _skipHumanize: true, response: T.perguntarTipo(state.pedidoAtual.items) };
 }
@@ -1599,17 +1673,27 @@ function handlePagamento(text, state, company) {
 
 async function handleConfirmacao(text, companyId, phone, state, company, cardapio) {
   const confirmacao = await ai.interpretConfirmation(text);
+  const lowerConf = ai.normalizar(text);
 
   // Se estava confirmando cancelamento
   if (state._confirmandoCancelamento) {
     state._confirmandoCancelamento = false;
-    if (confirmacao === 'sim') {
-      // Confirmou cancelamento → cancela
+    // "sim", "pode", "cancela" (isolado) → confirma cancelamento
+    const confirmaCancel = confirmacao === 'sim' ||
+      /^(cancela|cancelar|pode cancelar|sim\s+cancela)$/.test(lowerConf.trim());
+    if (confirmaCancel) {
+      // Salva backup antes de cancelar (permite retomar com "continuar")
+      state._pedidoBackup = JSON.parse(JSON.stringify(state.pedidoAtual));
       resetPedido(state);
       return { state, response: T.pedidoCancelado() };
     } else {
-      // Não confirmou cancelamento (disse "não" ou qualquer coisa) → retoma pedido
-      return buildConfirmation(state, company);
+      // Não confirmou cancelamento — tenta processar como modificação se for 'indefinido'
+      // Ex: "não, é pra retirar o refrigerante" contém intenção de modificação
+      if (confirmacao === 'indefinido') {
+        // Cai no fluxo normal de modificação abaixo (não retorna aqui)
+      } else {
+        return buildConfirmation(state, company);
+      }
     }
   }
 
@@ -1648,12 +1732,12 @@ async function handleConfirmacao(text, companyId, phone, state, company, cardapi
   }
 
   if (confirmacao === 'nao') {
-    // Primeira vez dizendo "não" ao resumo → pede confirmação de cancelamento
-    state._confirmandoCancelamento = true;
-    return {
-      state,
-      response: 'Quer mesmo cancelar o pedido? (sim / não)'
-    };
+    // Cliente disse "não" ao resumo — provavelmente quer mudar algo, não cancelar
+    const resumo = buildConfirmation(state, company);
+    resumo.response.unshift(
+      'Tudo bem! O que você gostaria de mudar? Pode me dizer, por exemplo:\n• "troca frango por costela"\n• "quero entrega em vez de retirada"\n• "remove o suco"'
+    );
+    return resumo;
   }
 
   // Qualquer outra resposta (indefinido) → trata como possível modificação
@@ -1720,6 +1804,22 @@ async function handleConfirmacao(text, companyId, phone, state, company, cardapi
     }
     state.etapa = 'MONTANDO_TAMANHO';
     return { state, response: 'Claro! Qual o tamanho da nova marmita? *Pequena* ou *Grande*?' };
+  }
+
+  // Detecta mudança de tamanho da marmita: "pode ser pequena", "faz uma grande", etc.
+  const tamanhoNovo = ai.interpretTamanho(text);
+  if (tamanhoNovo && /\b(pequena|grande)\b/.test(lowerText)) {
+    const marmitas = state.pedidoAtual.items.filter(i => i.tipo === 'marmita');
+    if (marmitas.length > 0) {
+      const precoNovo = tamanhoNovo === 'Grande' ? 22 : 20;
+      for (const m of marmitas) {
+        m.tamanho = tamanhoNovo;
+        m.price = precoNovo;
+      }
+      const resumo = buildConfirmation(state, company);
+      resumo.response.unshift(T.modificacaoAceita());
+      return resumo;
+    }
   }
 
   // Se for indefinido ou qualquer outra coisa (reclamação do resumo, dúvida),

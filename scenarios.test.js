@@ -4,6 +4,19 @@
 // Baseado em padrões reais de comportamento de clientes via WhatsApp
 // ═══════════════════════════════════════════════════════════════════════
 
+// Mocks devem ser declarados ANTES dos requires
+jest.mock('./stateManager', () => ({
+  cacheGet: jest.fn().mockResolvedValue(null),
+  cacheSet: jest.fn().mockResolvedValue(true)
+}));
+jest.mock('./logger', () => ({
+  debug: jest.fn(),
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+  stateTransition: jest.fn()
+}));
+
 const { process: smProcess } = require('./stateMachine');
 const db = require('./database');
 
@@ -32,7 +45,11 @@ function criarEstadoInicial() {
 
 async function executarFluxo(mensagens, perfil, estadoInicial = null) {
   db.getCustomerByPhone = jest.fn().mockResolvedValue(perfil);
-  
+  db.getProducts = jest.fn().mockResolvedValue([]);            // usa cardápio padrão
+  db.saveLastOrder = jest.fn().mockResolvedValue(true);
+  db.saveCustomerPreferences = jest.fn().mockResolvedValue(true);
+  db.saveCustomer = jest.fn().mockResolvedValue(true);
+
   let state = estadoInicial || criarEstadoInicial();
   const historico = [];
   
@@ -204,7 +221,8 @@ describe('Cenário 3: Pedido Grande para Família', () => {
       'costela',
       'arroz e feijão alface e maionese',
       'pure repolho',
-      '3 sucos e 2 refri'
+      '3 sucos e 2 refri',
+      'não' // rejeita sobremesa → mostra perguntarTipo com resumo completo
     ], perfil);
     
     const texto = getTextoCompleto(historico);
@@ -225,6 +243,7 @@ describe('Cenário 3: Pedido Grande para Família', () => {
       'arroz e feijão alface e maionese',
       'pure repolho',
       '3 sucos e 2 refri',
+      'não', // rejeita sobremesa → AGUARDANDO_TIPO
       'entrega',
       'Av Paulista 1000 apto 52 Bela Vista',
       'sim',
@@ -293,10 +312,10 @@ describe('Cenário 5: Cliente Frustrado', () => {
       'arroz',
       'aff'
     ], perfil);
-    
+
     const texto = getTextoCompleto(historico);
-    // Deve ter resposta empática
-    expect(texto).toMatch(/desculp|😅|pular|voltan/i);
+    // Deve ter resposta empática (desculpa ou perdoa — resposta randomizada)
+    expect(texto).toMatch(/desculp|perdoa|😅|pular|voltan/i);
   });
 
   test('não trava com "sei lá, o que tem?"', async () => {
@@ -597,7 +616,8 @@ describe('Cenário 11: Cliente Pede Resumo no Meio', () => {
       '2 grandes',
       'frango',
       'arroz e feijão alface',
-      '1 suco e 2 refri'
+      '1 suco e 2 refri',
+      'não' // rejeita sobremesa → perguntarTipo mostra resumo completo
     ], perfil);
     
     const texto = getTextoCompleto(historico);
@@ -621,6 +641,7 @@ describe('Cenário 11: Cliente Pede Resumo no Meio', () => {
       'frango',
       'arroz e feijão alface',
       '1 suco e 2 refri',
+      'não', // rejeita sobremesa → AGUARDANDO_TIPO
       'entrega',
       'Rua Barão de Itapura 1200 Bosque',
       'sim',
@@ -724,11 +745,10 @@ describe('Integridade do Pedido', () => {
       'oi',
       'grande',
       'frango',
-      'arroz',
-      'sem salada',
+      'arroz', // handleAcompanhamento finaliza marmita e vai para OFERECENDO_UPSELL
       '2 sucos'
     ], perfil);
-    
+
     const suco = state.pedidoAtual.items.find(i => /suco/i.test(i.name));
     expect(suco?.price).toBe(8);
     expect(suco?.quantity).toBe(2);
@@ -739,8 +759,7 @@ describe('Integridade do Pedido', () => {
       'oi',
       'grande',
       'frango',
-      'arroz',
-      'sem salada',
+      'arroz', // handleAcompanhamento finaliza marmita e vai para OFERECENDO_UPSELL
       '3 refri'
     ], perfil);
     
@@ -1209,8 +1228,7 @@ describe('Cenário 16: Smart Step-Skipping', () => {
       'oi',
       'grande',
       'frango',
-      'arroz e feijão',
-      'sem salada',
+      'arroz e feijão', // handleAcompanhamento finaliza marmita e vai para OFERECENDO_UPSELL
       '2 coca lata'
     ], perfil);
     

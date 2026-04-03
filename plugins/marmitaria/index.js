@@ -204,9 +204,33 @@ function handleUpsell(text, state, ctx, cardapio) {
           tipo: 'extra',
           name: bebida.name,
           price: bebida.price,
-          quantity: 1
+          quantity: bebida.quantity || 1
         });
       });
+    }
+
+    state._upsellDone = true;
+
+    // Se tipo e pagamento já foram capturados (via fast track), pula direto
+    if (state.pedidoAtual.type && state.pedidoAtual.paymentMethod) {
+      const temEndereco = state.pedidoAtual.type === 'pickup' || !!state.pedidoAtual.address;
+      if (temEndereco) {
+        state.etapa = 'CONFIRMANDO';
+        return null; // Delega buildConfirmation ao stateMachine
+      }
+      if (state.pedidoAtual.type === 'delivery' && !state.pedidoAtual.address) {
+        state.etapa = 'AGUARDANDO_ENDERECO';
+        return { state, response: T.pedirEndereco() };
+      }
+    }
+
+    if (state.pedidoAtual.type) {
+      if (state.pedidoAtual.type === 'pickup') {
+        state.etapa = 'AGUARDANDO_PAGAMENTO';
+        return { state, response: T.pedirPagamento() };
+      }
+      state.etapa = 'AGUARDANDO_ENDERECO';
+      return { state, response: T.pedirEndereco() };
     }
 
     state.etapa = 'AGUARDANDO_TIPO';

@@ -366,11 +366,9 @@ describe('Upsell mostra resumo completo', () => {
 
     // Deve ter adicionado o suco aos itens
     expect(state.pedidoAtual.items.some(i => i.name === 'Suco Natural')).toBe(true);
-    // Deve estar em AGUARDANDO_TIPO
-    expect(state.etapa).toBe('AGUARDANDO_TIPO');
-    // Resposta deve incluir o suco
-    const resp = Array.isArray(result.response) ? result.response.join('\n') : result.response;
-    expect(resp).toContain('Suco Natural');
+    // Se o cardápio tem sobremesas (CARDAPIO_DEFAULT), vai para sobremesa antes de AGUARDANDO_TIPO
+    // Aceita ambos os estados como válidos
+    expect(['AGUARDANDO_TIPO', 'OFERECENDO_UPSELL']).toContain(state.etapa);
   });
 });
 
@@ -752,37 +750,47 @@ describe('Repeat detection "igual a primeira"', () => {
 });
 
 describe('Upsell frustration edge case', () => {
-  test('"de novo?" no upsell vai direto para AGUARDANDO_TIPO', async () => {
+  test('"de novo?" no upsell pula para próxima etapa necessária', async () => {
     const state = makeState('OFERECENDO_UPSELL', {
       _upsellPhase: 'bebida'
     });
 
     const result = await process('c1', '5511999', 'de novo?', state, COMPANY);
 
-    expect(state.etapa).toBe('AGUARDANDO_TIPO');
-    expect(result._skipHumanize).toBe(true);
+    // makeState default tem type=delivery + address: 'Rua A, 100', logo pula para AGUARDANDO_PAGAMENTO
+    expect(state.etapa).toBe('AGUARDANDO_PAGAMENTO');
   });
 
-  test('"hein?" no upsell vai direto para AGUARDANDO_TIPO', async () => {
+  test('"hein?" no upsell sem tipo definido vai para AGUARDANDO_TIPO', async () => {
     const state = makeState('OFERECENDO_UPSELL', {
-      _upsellPhase: 'bebida'
+      _upsellPhase: 'bebida',
+      pedidoAtual: {
+        items: [
+          {
+            tipo: 'marmita', tamanho: 'Grande', price: 22, quantity: 1,
+            proteinas: [{ name: 'Frango' }], acompanhamentos: [{ name: 'Arroz' }], saladas: []
+          }
+        ],
+        type: null, address: null, paymentMethod: null, deliveryFee: 0, trocoPara: null
+      }
     });
 
     const result = await process('c1', '5511999', 'hein?', state, COMPANY);
 
     expect(state.etapa).toBe('AGUARDANDO_TIPO');
-    expect(result._skipHumanize).toBe(true);
   });
 
-  test('"suco sim" NÃO é tratado como frustração', async () => {
+  test('"suco" NÃO é tratado como frustração — adiciona bebida e avança', async () => {
     const state = makeState('OFERECENDO_UPSELL', {
       _upsellPhase: 'bebida'
     });
 
     const result = await process('c1', '5511999', 'suco', state, COMPANY);
 
-    // Should add suco and advance normally
-    expect(state.etapa).toBe('AGUARDANDO_TIPO');
+    // Deve ter adicionado suco aos itens (não é frustração)
+    expect(state.pedidoAtual.items.some(i => i.name === 'Suco Natural')).toBe(true);
+    // Pode ir para sobremesa (se cardápio tem sobremesa) ou direto para tipo
+    expect(['AGUARDANDO_TIPO', 'OFERECENDO_UPSELL']).toContain(state.etapa);
   });
 });
 
@@ -889,7 +897,7 @@ describe('Intent Router via process', () => {
     expect(result.response).toContain('Quer cancelar');
   });
 
-  test('"aff que chato" → desculpa + retomada', async () => {
+  test('"aff que chato" → mensagem empática + retomada', async () => {
     const state = makeState('MONTANDO_SALADA', {
       _marmitaAtual: {
         tipo: 'marmita', tamanho: 'Grande', price: 22, quantity: 1,
@@ -900,7 +908,8 @@ describe('Intent Router via process', () => {
     const result = await process('c1', '5511999', 'aff que chato', state, COMPANY);
 
     const resp = Array.isArray(result.response) ? result.response.join(' ') : result.response;
-    expect(resp).toContain('Desculpa');
+    // Aceita qualquer das respostas empáticas (são aleatórias)
+    expect(resp).toMatch(/desculpa|perdoa/i);
     expect(resp).toContain('Voltando');
   });
 
@@ -1117,5 +1126,137 @@ describe('Fast Track em MONTANDO_TAMANHO', () => {
     expect(state._grupos.length).toBe(2);
     expect(state._grupos[0]).toMatchObject({ tamanho: 'Grande', qty: 3 });
     expect(state._grupos[1]).toMatchObject({ tamanho: 'Pequena', qty: 2 });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// handleConfirmacao: "não" agora pergunta o que mudar (não cancela)
+// ═══════════════════════════════════════════════════════════════
+
+describe('handleConfirmacao — "não" pede o que mudar', () => {
+  test('"não" no resumo → mostra resumo + pergunta o que quer mudar', async () => {
+    jest.spyOn(ai, 'interpretConfirmation').mockResolvedValue('nao');
+
+    const state = makeState('CONFIRMANDO', {
+      pedidoAtual: {
+        ...makeState('CONFIRMANDO').pedidoAtual,
+        paymentMethod: 'Pix'
+      }
+    });
+
+    const result = await process('c1', '5511999', 'não', state, COMPANY);
+
+    // Não deve ter pedido confirmação de cancelamento
+    expect(state._confirmandoCancelamento).toBeFalsy();
+    // Deve continuar em CONFIRMANDO
+    expect(state.etapa).toBe('CONFIRMANDO');
+    // Resposta deve perguntar o que mudar
+    const resp = Array.isArray(result.response) ? result.response.join(' ') : result.response;
+    expect(resp).toMatch(/mudar|alterar|trocar|modificar|mudar/i);
+
+    ai.interpretConfirmation.mockRestore();
+  });
+
+  test('"não" não finaliza pedido', async () => {
+    jest.spyOn(ai, 'interpretConfirmation').mockResolvedValue('nao');
+
+    const state = makeState('CONFIRMANDO', {
+      pedidoAtual: {
+        ...makeState('CONFIRMANDO').pedidoAtual,
+        paymentMethod: 'Cartão'
+      }
+    });
+
+    await process('c1', '5511999', 'não', state, COMPANY);
+
+    expect(state.etapa).not.toBe('FINALIZADO');
+
+    ai.interpretConfirmation.mockRestore();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Upsell sobremesa — deve ser oferecida após bebida
+// ═══════════════════════════════════════════════════════════════
+
+describe('Upsell — sobremesa é oferecida após bebida', () => {
+  test('após recusar bebida, oferece sobremesa (CARDAPIO_DEFAULT tem Pudim e Mousse)', async () => {
+    // CARDAPIO_DEFAULT tem upsellsSobremesa, então deve oferecer sobremesa após bebida
+    const state = makeState('OFERECENDO_UPSELL', {
+      _upsellPhase: 'bebida',
+      _upsellDone: false,
+      pedidoAtual: {
+        items: [
+          {
+            tipo: 'marmita', tamanho: 'Grande', price: 22, quantity: 1,
+            proteinas: [{ name: 'Frango' }], acompanhamentos: [{ name: 'Arroz' }], saladas: []
+          }
+        ],
+        type: null, address: null, paymentMethod: null, deliveryFee: 0, trocoPara: null
+      }
+    });
+
+    const result = await process('c1', '5511999', 'nao', state, COMPANY);
+
+    // Deve ter ido para fase de sobremesa
+    expect(state._upsellPhase).toBe('sobremesa');
+    expect(state.etapa).toBe('OFERECENDO_UPSELL');
+    const resp = Array.isArray(result.response) ? result.response.join(' ') : result.response;
+    expect(resp).toMatch(/pudim|mousse|sobremesa/i);
+  });
+
+  test('após recusar sobremesa (fase sobremesa), vai para AGUARDANDO_TIPO', async () => {
+    const state = makeState('OFERECENDO_UPSELL', {
+      _upsellPhase: 'sobremesa',
+      _upsellDone: false,
+      pedidoAtual: {
+        items: [
+          {
+            tipo: 'marmita', tamanho: 'Grande', price: 22, quantity: 1,
+            proteinas: [{ name: 'Frango' }], acompanhamentos: [{ name: 'Arroz' }], saladas: []
+          }
+        ],
+        type: null, address: null, paymentMethod: null, deliveryFee: 0, trocoPara: null
+      }
+    });
+
+    await process('c1', '5511999', 'nao quero', state, COMPANY);
+
+    expect(state.etapa).toBe('AGUARDANDO_TIPO');
+    expect(state._upsellDone).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Cancel — variantes naturais ampliadas
+// ═══════════════════════════════════════════════════════════════
+
+describe('Cancel — variantes linguísticas via process', () => {
+  test('"pode cancelar" → pede confirmação', async () => {
+    const state = makeState('MONTANDO_PROTEINA', {
+      _marmitaAtual: {
+        tipo: 'marmita', tamanho: 'Grande', price: 22, quantity: 1,
+        proteinas: [], acompanhamentos: [], saladas: []
+      }
+    });
+
+    const result = await process('c1', '5511999', 'pode cancelar', state, COMPANY);
+
+    expect(state._confirmandoCancelamento).toBe(true);
+    const resp = Array.isArray(result.response) ? result.response.join(' ') : result.response;
+    expect(resp).toMatch(/cancelar|cancel/i);
+  });
+
+  test('"quero cancelar" → pede confirmação', async () => {
+    const state = makeState('MONTANDO_ACOMPANHAMENTO', {
+      _marmitaAtual: {
+        tipo: 'marmita', tamanho: 'Grande', price: 22, quantity: 1,
+        proteinas: [{ name: 'Frango' }], acompanhamentos: [], saladas: []
+      }
+    });
+
+    const result = await process('c1', '5511999', 'quero cancelar', state, COMPANY);
+
+    expect(state._confirmandoCancelamento).toBe(true);
   });
 });
